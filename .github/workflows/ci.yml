@@ -23,24 +23,18 @@ jobs:
           node-version: "20"
           cache: "pnpm"
 
-      - name: Setup pnpm (corepack)
-        run: |
-          corepack enable
-          corepack prepare pnpm@10.32.1 --activate
-          pnpm --version
-
       - name: Install
-        run: pnpm install --frozen-lockfile
+        run: npx -y pnpm@10.32.1 install --frozen-lockfile
 
       - name: Approve build scripts
-        run: pnpm approve-builds --all
+        run: npx -y pnpm@10.32.1 approve-builds --all
 
       - name: Build API
-        run: pnpm --filter api build
+        run: npx -y pnpm@10.32.1 --filter api build
 
       - name: Build Worker
-        run: pnpm --filter worker build
+        run: npx -y pnpm@10.32.1 --filter worker build
 
       - name: Build Dashboard
-        run: pnpm --filter dashboard build
+        run: npx -y pnpm@10.32.1 --filter dashboard build
 
