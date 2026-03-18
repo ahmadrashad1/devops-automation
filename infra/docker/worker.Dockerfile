@@ -3,6 +3,7 @@ WORKDIR /app
 COPY package.json pnpm-workspace.yaml ./
 COPY services ./services
 RUN npm install -g pnpm && pnpm install --filter worker...
+RUN pnpm approve-builds --all
 RUN pnpm --filter worker build
 
 FROM node:20-alpine
