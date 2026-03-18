@@ -1,6 +1,7 @@
 import { Body, Controller, Logger, Post } from '@nestjs/common';
 import { JobsService } from '../jobs/jobs.service';
 import { DatabaseService } from '../database/database.service';
+import { PipelineService } from '../pipeline/pipeline.service';
 
 interface GitHubPushPayload {
   repository?: {
@@ -17,7 +18,8 @@ export class WebhooksController {
 
   constructor(
     private readonly jobsService: JobsService,
-    private readonly db: DatabaseService
+    private readonly db: DatabaseService,
+    private readonly pipelines: PipelineService
   ) {}
 
   @Post('github')
@@ -43,31 +45,25 @@ export class WebhooksController {
       provider: 'github',
       defaultBranch: branch === 'unknown' ? 'main' : branch
     });
-    const pipeline = await this.db.createPipeline({
-      tenantId: tenant.id,
-      projectId: project.id,
-      commitSha,
-      branch,
-      source: 'push'
-    });
 
     this.logger.log(
       `Received GitHub push webhook: repo=${repoUrl} commit=${commitSha} ref=${ref}`
     );
 
-    await this.jobsService.enqueuePipelineJob({
+    const created = await this.pipelines.createPipelineFromRepo({
       tenantId: tenant.id,
       projectId: project.id,
-      pipelineId: pipeline.id,
       repoUrl,
-      commitSha
+      commitSha,
+      branch,
+      source: 'push'
     });
 
     return {
       status: 'pipeline_created',
       tenantId: tenant.id,
       projectId: project.id,
-      pipelineId: pipeline.id
+      pipelineId: created.pipelineId
     };
   }
 }

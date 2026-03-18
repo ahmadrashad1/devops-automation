@@ -32,6 +32,34 @@ CREATE TABLE IF NOT EXISTS pipelines (
   created_at    timestamptz NOT NULL DEFAULT now(),
   source        text NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS pipeline_stages (
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  pipeline_id  uuid NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+  name         text NOT NULL,
+  position     int NOT NULL,
+  status       text NOT NULL,
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  started_at   timestamptz,
+  finished_at  timestamptz,
+  UNIQUE (pipeline_id, position)
+);
+
+CREATE TABLE IF NOT EXISTS jobs (
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  pipeline_id  uuid NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+  stage_id     uuid NOT NULL REFERENCES pipeline_stages(id) ON DELETE CASCADE,
+  name         text NOT NULL,
+  status       text NOT NULL,
+  image        text NOT NULL,
+  script       jsonb NOT NULL,
+  logs         text NOT NULL DEFAULT '',
+  artifacts_dir text,
+  queued_at    timestamptz NOT NULL DEFAULT now(),
+  started_at   timestamptz,
+  finished_at  timestamptz,
+  UNIQUE (stage_id, name)
+);
 `;
 
 @Injectable()
@@ -122,6 +150,175 @@ export class DatabaseService implements OnModuleInit {
       ]
     );
     return created.rows[0];
+  }
+
+  async createStagesAndJobs(params: {
+    pipelineId: string;
+    stages: string[];
+    jobs: Array<{
+      name: string;
+      stage: string;
+      image: string;
+      script: string[];
+    }>;
+  }) {
+    const stageRows = new Map<string, { id: string; name: string; position: number }>();
+
+    let pos = 1;
+    for (const stageName of params.stages) {
+      const created = await this.pool.query(
+        `INSERT INTO pipeline_stages (pipeline_id, name, position, status)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id, name, position`,
+        [params.pipelineId, stageName, pos, pos === 1 ? 'queued' : 'pending']
+      );
+      stageRows.set(stageName, created.rows[0]);
+      pos += 1;
+    }
+
+    const jobIds: Array<{
+      id: string;
+      name: string;
+      stage: string;
+      stageId: string;
+      image: string;
+      script: string[];
+    }> = [];
+
+    for (const job of params.jobs) {
+      const stage = stageRows.get(job.stage);
+      if (!stage) {
+        throw new Error(`Job ${job.name} references unknown stage ${job.stage}`);
+      }
+      const created = await this.pool.query(
+        `INSERT INTO jobs (pipeline_id, stage_id, name, status, image, script)
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+         RETURNING id`,
+        [
+          params.pipelineId,
+          stage.id,
+          job.name,
+          'queued',
+          job.image,
+          JSON.stringify(job.script)
+        ]
+      );
+      jobIds.push({
+        id: created.rows[0].id,
+        name: job.name,
+        stage: job.stage,
+        stageId: stage.id,
+        image: job.image,
+        script: job.script
+      });
+    }
+
+    return { stages: [...stageRows.entries()], jobs: jobIds };
+  }
+
+  async getQueuedJobsForStage(stageId: string) {
+    const res = await this.pool.query(
+      `SELECT id, name, image, script
+       FROM jobs
+       WHERE stage_id=$1 AND status='queued'
+       ORDER BY name ASC`,
+      [stageId]
+    );
+    return res.rows.map((r) => ({
+      id: r.id as string,
+      name: r.name as string,
+      image: r.image as string,
+      script: (r.script as unknown as string[])
+    })) as Array<{ id: string; name: string; image: string; script: string[] }>;
+  }
+
+  async getFirstStageId(pipelineId: string) {
+    const res = await this.pool.query(
+      `SELECT id FROM pipeline_stages WHERE pipeline_id=$1 ORDER BY position ASC LIMIT 1`,
+      [pipelineId]
+    );
+    return res.rows[0]?.id as string | undefined;
+  }
+
+  async markJobRunning(jobId: string) {
+    await this.pool.query(
+      `UPDATE jobs SET status='running', started_at=now() WHERE id=$1`,
+      [jobId]
+    );
+  }
+
+  async appendJobLogs(jobId: string, logsChunk: string) {
+    if (!logsChunk) return;
+    await this.pool.query(
+      `UPDATE jobs
+       SET logs=COALESCE(logs,'') || $2
+       WHERE id=$1`,
+      [jobId, logsChunk]
+    );
+  }
+
+  async completeJob(params: {
+    jobId: string;
+    status: 'success' | 'failed';
+    logs?: string;
+    artifactsDir?: string;
+  }) {
+    await this.pool.query(
+      `UPDATE jobs
+       SET
+         status=$2,
+         finished_at=now(),
+         logs = CASE WHEN $3::text IS NULL THEN logs ELSE $3 END,
+         artifacts_dir = CASE WHEN $4::text IS NULL THEN artifacts_dir ELSE $4 END
+       WHERE id=$1`,
+      [
+        params.jobId,
+        params.status,
+        params.logs ?? null,
+        params.artifactsDir ?? null
+      ]
+    );
+  }
+
+  async stageStatus(stageId: string) {
+    const jobs = await this.pool.query(
+      `SELECT status FROM jobs WHERE stage_id=$1`,
+      [stageId]
+    );
+    const statuses = jobs.rows.map((r) => r.status);
+    const anyFailed = statuses.includes('failed');
+    const allSuccess = statuses.length > 0 && statuses.every((s) => s === 'success');
+    const anyRunning = statuses.includes('running') || statuses.includes('queued');
+    return { anyFailed, allSuccess, anyRunning };
+  }
+
+  async setStageStatus(stageId: string, status: string) {
+    await this.pool.query(
+      `UPDATE pipeline_stages
+       SET status=$2,
+           started_at = CASE WHEN $2='running' AND started_at IS NULL THEN now() ELSE started_at END,
+           finished_at = CASE WHEN $2 IN ('success','failed') THEN now() ELSE finished_at END
+       WHERE id=$1`,
+      [stageId, status]
+    );
+  }
+
+  async getNextStageId(pipelineId: string, currentStageId: string) {
+    const current = await this.pool.query(
+      `SELECT position FROM pipeline_stages WHERE id=$1 AND pipeline_id=$2`,
+      [currentStageId, pipelineId]
+    );
+    const pos = current.rows[0]?.position as number | undefined;
+    if (!pos) return undefined;
+    const next = await this.pool.query(
+      `SELECT id FROM pipeline_stages WHERE pipeline_id=$1 AND position=$2`,
+      [pipelineId, pos + 1]
+    );
+    return next.rows[0]?.id as string | undefined;
+  }
+
+  async setPipelineStatus(pipelineId: string, status: string) {
+    await this.pool.query(`UPDATE pipelines SET status=$2 WHERE id=$1`, [pipelineId, status]);
   }
 }
 

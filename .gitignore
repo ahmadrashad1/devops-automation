@@ -12,3 +12,10 @@ coverage/
 
 pgdata/
 
+# Local demo/testing
+test-repos/
+
+# Worker artifacts/logs (generated)
+artifacts/
+services/worker/artifacts/
+

@@ -38,6 +38,7 @@ export class JobsService {
     pipelineId: string;
     repoUrl: string;
     commitSha: string;
+    jobId?: string;
   }) {
     const jobName = 'pipeline-job';
     const job = await this.queue.add(jobName, payload);
