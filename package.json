@@ -1,0 +1,15 @@
+{
+  "name": "devops-automation-saas",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev:api": "pnpm --filter api dev",
+    "dev:dashboard": "pnpm --filter dashboard dev",
+    "dev:worker": "pnpm --filter worker dev",
+    "dev": "concurrently \"pnpm dev:api\" \"pnpm dev:dashboard\" \"pnpm dev:worker\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
+  }
+}
+
