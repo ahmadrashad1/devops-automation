@@ -2,4 +2,9 @@ packages:
   - "apps/*"
   - "services/*"
   - "libs/*"
-
+allowBuilds:
+  '@nestjs/core': true
+  '@nestjs/cli': true
+  '@swc/core': true
+  esbuild: true
+  msgpackr-extract: true

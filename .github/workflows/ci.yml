@@ -15,6 +15,7 @@ jobs:
     timeout-minutes: 15
     env:
       CI: true
+      NEXT_TELEMETRY_DISABLED: 1
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,19 +24,26 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: "pnpm"
+
+      - name: Enable pnpm (Corepack)
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.32.1 --activate
+          pnpm -v
+
+      # Build script allowlist lives in pnpm-workspace.yaml (allowBuilds).
+      # Avoid `approve-builds` in CI — not required once policy is committed (pnpm guidance).
 
       - name: Install
-        run: npx -y pnpm@10.32.1 install --frozen-lockfile
-
-      - name: Approve build scripts
-        run: npx -y pnpm@10.32.1 approve-builds --all
+        run: pnpm install --frozen-lockfile
 
       - name: Build API
-        run: npx -y pnpm@10.32.1 --filter api build
+        run: pnpm --filter api build
 
       - name: Build Worker
-        run: npx -y pnpm@10.32.1 --filter worker build
+        run: pnpm --filter worker build
 
       - name: Build Dashboard
-        run: npx -y pnpm@10.32.1 --filter dashboard build
+        run: pnpm --filter dashboard build
 
