@@ -60,8 +60,10 @@ services:
       REDIS_URL: redis://redis:6379
       JOB_QUEUE_NAME: jobs
       DASHBOARD_ORIGIN: http://localhost:3001
-      # AI: Gemini (free) preferred when GEMINI_API_KEY is set — see README / repo root .env
+      # AI: Groq (free dev tier) preferred when GROQ_API_KEY is set — see README / repo root .env
       AI_PROVIDER: ${AI_PROVIDER:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-llama-3.1-8b-instant}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}

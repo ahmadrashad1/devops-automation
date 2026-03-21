@@ -74,8 +74,9 @@ export default function AiWorkflowPage() {
     <div>
       <h1>AI workflow</h1>
       <p style={{ maxWidth: '60ch' }}>
-        Describe the CI job in plain language. The API uses <strong style={{ color: 'var(--text)' }}>Google Gemini</strong>{' '}
-        (free Flash by default) or OpenAI if configured, then{' '}
+        Describe the CI job in plain language. The API uses <strong style={{ color: 'var(--text)' }}>Groq</strong> when{' '}
+        <code>GROQ_API_KEY</code> is set (recommended free dev tier), or <strong style={{ color: 'var(--text)' }}>Gemini</strong> /{' '}
+        OpenAI if configured, then{' '}
         <strong style={{ color: 'var(--text)' }}>validates YAML</strong> with the same parser as the
         pipeline engine. Save the output to <code>.saas/pipeline.yaml</code> in your repo.
       </p>
@@ -150,13 +151,16 @@ export default function AiWorkflowPage() {
         <h3 style={{ marginTop: 0 }}>Requirements</h3>
         <ul className="muted" style={{ margin: 0, paddingLeft: '1.2rem' }}>
           <li>
-            API must set <code>GEMINI_API_KEY</code> (free —{' '}
+            API should set <code>GROQ_API_KEY</code> (recommended —{' '}
+            <a href="https://console.groq.com/keys" target="_blank" rel="noreferrer">
+              Groq Console
+            </a>
+            ) in <strong>repo root</strong> <code>.env</code> for Docker, or export it before <code>pnpm dev:api</code>.
+            Optional: <code>GEMINI_API_KEY</code> (
             <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">
               Google AI Studio
             </a>
-            ) in <strong>repo root</strong> <code>.env</code> for Docker, or export it before{' '}
-            <code>pnpm dev:api</code>. Optional: <code>OPENAI_API_KEY</code> if you prefer OpenAI (
-            <code>AI_PROVIDER=openai</code> when both keys exist).
+            ) or <code>OPENAI_API_KEY</code>. Use <code>AI_PROVIDER=groq|gemini|openai</code> to force a provider.
           </li>
           <li>
             CORS: API allows dashboard origins; override with <code>DASHBOARD_ORIGIN</code> on the API.

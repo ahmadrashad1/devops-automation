@@ -22,7 +22,7 @@ This repository contains a monorepo for a multi-tenant DevOps automation SaaS MV
 - **2026-03-18**: Worker now performs real work for `pipeline-job`: clones repo at commit SHA, runs scripts inside Docker image, captures logs, writes a basic artifacts folder (logs file), and calls back API to advance stages.
 - **2026-03-21**: Added public read APIs for pipeline visibility (`GET /api/pipelines`, `GET /api/pipelines/:pipelineId`, `GET /api/pipelines/:pipelineId/jobs`) to support dashboard integration.
 - **2026-03-21**: Added optional GitHub webhook signature verification using `WEBHOOK_GITHUB_SECRET` and raw request body (`x-hub-signature-256`).
-- **2026-03-21**: **Full-stack dashboard** (pipelines list/detail with live refresh, projects, AI workflow UI) + **AI APIs**: `POST /api/ai/pipeline`, `POST /api/ai/pipeline/fix`, `POST /api/ai/analyze-logs` (OpenAI). CORS enabled for local dashboard; `GET /api/projects` for repo list.
+- **2026-03-21**: **Full-stack dashboard** (pipelines list/detail with live refresh, projects, AI workflow UI) + **AI APIs**: `POST /api/ai/pipeline`, `POST /api/ai/pipeline/fix`, `POST /api/ai/analyze-logs` (Groq / Gemini / OpenAI). CORS enabled for local dashboard; `GET /api/projects` for repo list.
 - **2026-03-21**: Dashboard + pnpm: root `.npmrc` hoists Next/React for reliable vendor chunks; `pnpm run clean` / `dev:fresh` in dashboard to clear stale `.next`.
 - **2026-03-21**: **Docker Compose**: Postgres + Redis by default; optional **`full`** profile runs **API + worker + dashboard** (`pnpm docker:up`). Worker mounts host `docker.sock` for job containers.
 
@@ -76,25 +76,26 @@ Services:
 | Dashboard  | 3001        | Browser uses `NEXT_PUBLIC_API_URL=http://localhost:3010` (baked at image build) |
 | Worker     | —           | **`/var/run/docker.sock` mounted** so jobs can `docker run` on your machine |
 
-**AI (Gemini Flash free tier):** put your Google AI Studio key in a **`.env` file in the repo root** (same folder as `docker-compose.yml`):
+**AI (recommended: Groq free dev tier):** put keys in a **`.env` file in the repo root** (same folder as `docker-compose.yml`). The API picks **Groq first** when `GROQ_API_KEY` is set (generous free limits), then Gemini, then OpenAI.
 
-1. Open [Google AI Studio → Get API key](https://aistudio.google.com/apikey).
-2. Create/copy your key.
+1. **Groq (recommended):** open [Groq Console → API keys](https://console.groq.com/keys), create a key.
+2. **Optional — Gemini:** [Google AI Studio](https://aistudio.google.com/apikey) (free tier can hit strict **429** quotas).
 3. **Use a file named `.env`**, not `.env.example`. Docker Compose only reads **`.env`** in the repo root. Copy the template and edit:
    ```powershell
    copy .env.example .env
    ```
-   Then put your key in **`.env`**:
+   Example **`.env`**:
    ```env
-   GEMINI_API_KEY=paste_your_key_here
+   GROQ_API_KEY=paste_your_groq_key_here
+   # Optional: also set GEMINI_API_KEY if you want Gemini as fallback or AI_PROVIDER=gemini
    ```
-   **Never commit real keys** — `.env` is gitignored; `.env.example` is a blank template for others.
-4. If you also set `OPENAI_API_KEY`, Gemini is still preferred when `GEMINI_API_KEY` is set unless you set `AI_PROVIDER=openai`.
+   **Never commit real keys** — `.env` is gitignored; `.env.example` is a template for others.
+4. If both `GROQ_API_KEY` and `GEMINI_API_KEY` are set, Groq is used unless you set e.g. `AI_PROVIDER=gemini` or `AI_PROVIDER=openai`.
 
-For **local API without Docker**, set the same variable in PowerShell before `pnpm dev:api`:
+For **local API without Docker**, set variables in PowerShell before `pnpm dev:api`:
 
 ```powershell
-$env:GEMINI_API_KEY="paste_your_key_here"
+$env:GROQ_API_KEY="paste_your_key_here"
 pnpm dev:api
 ```
 
@@ -211,11 +212,13 @@ API:
 - `DATABASE_URL` (default `postgresql://devops:devops@localhost:5432/devops_automation`)
 - `WEBHOOK_GITHUB_SECRET` (optional; enables strict GitHub HMAC signature verification)
 - `DASHBOARD_ORIGIN` (optional; comma-separated allowed CORS origins, default `http://localhost:3001,http://localhost:3000`)
-- **AI (default: free Gemini when configured):**
-  - **`GEMINI_API_KEY`** — from [Google AI Studio](https://aistudio.google.com/apikey). **If set, the API uses Gemini first** (even if `OPENAI_API_KEY` is also set). Use **`AI_PROVIDER=openai`** to force OpenAI when both keys exist.
-  - **`GEMINI_MODEL`** (optional; default `gemini-2.0-flash`)
+- **AI (default: Groq when `GROQ_API_KEY` is set):**
+  - **`GROQ_API_KEY`** — from [Groq Console](https://console.groq.com/keys). **Recommended** free dev tier (high limits vs Gemini’s strict quotas).
+  - **`GROQ_MODEL`** (optional; default `llama-3.1-8b-instant`)
+  - **`GEMINI_API_KEY`** / **`GEMINI_MODEL`** — optional [Google AI Studio](https://aistudio.google.com/apikey); used when Groq is not configured or after quota if you set both and force Gemini first
+  - **`GEMINI_FALLBACK_MODELS`** — optional comma-separated extra model IDs to try on Gemini
   - **`OPENAI_API_KEY`** / **`OPENAI_MODEL`** — optional paid OpenAI path
-  - **`AI_PROVIDER`** — `gemini` or `openai` to force one provider
+  - **`AI_PROVIDER`** — `groq`, `gemini`, or `openai` to force one provider
 
 Dashboard (`apps/dashboard/.env.local`):
 
@@ -246,7 +249,7 @@ Job logs are also persisted in Postgres (`jobs.logs`) via log streaming.
 
 ## AI workflow APIs
 
-Requires **`GEMINI_API_KEY`** (Gemini) and/or **`OPENAI_API_KEY`** (OpenAI) on the API process — see env vars above.
+Requires at least one of **`GROQ_API_KEY`** (recommended), **`GEMINI_API_KEY`**, or **`OPENAI_API_KEY`** on the API process — see env vars above.
 
 - `POST /api/ai/pipeline` — body `{ "prompt": "..." }` → `{ yaml, valid, validationError?, model, provider }` (YAML validated with the same parser as the pipeline engine)
 - `POST /api/ai/pipeline/fix` — body `{ "yaml", "validationError", "hint?" }` to repair invalid YAML

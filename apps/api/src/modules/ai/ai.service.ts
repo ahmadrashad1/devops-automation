@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  HttpException,
   Injectable,
   ServiceUnavailableException
 } from '@nestjs/common';
@@ -40,36 +41,91 @@ Keep answers concise and actionable.`;
 
 type ChatMsg = { role: 'system' | 'user' | 'assistant'; content: string };
 
+type AiProviderKind = 'openai' | 'gemini' | 'groq';
+
 @Injectable()
 export class AiService {
   private readonly openaiModel =
     process.env.OPENAI_MODEL || 'gpt-4o-mini';
+  /** Must match IDs from https://ai.google.dev/api/models — unversioned names often 404 */
   private readonly geminiModel =
     process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+  /** Groq: generous free dev tier — https://console.groq.com/keys */
+  private readonly groqModel =
+    process.env.GROQ_MODEL || 'llama-3.1-8b-instant';
+
+  /** Last Gemini model that succeeded (for response `model` field) */
+  private lastGeminiModelUsed: string | null = null;
+  /** Which backend actually served the last `chat()` (after Gemini→Groq fallback) */
+  private lastUsedProvider: AiProviderKind | null = null;
 
   /**
-   * Default: **Gemini (free)** when GEMINI_API_KEY is set — including if OpenAI is also set.
-   * Set AI_PROVIDER=openai to force OpenAI when both keys exist.
+   * Default order when `AI_PROVIDER` is unset: **Groq** (if key) → Gemini → OpenAI.
+   * Groq free tier is usually easier for day-to-day dev than Gemini’s strict quotas.
    */
-  private provider(): 'openai' | 'gemini' {
+  private provider(): AiProviderKind {
     const explicit = (process.env.AI_PROVIDER || '').toLowerCase().trim();
+    const hasGroq = !!process.env.GROQ_API_KEY?.trim();
     const hasGemini = !!process.env.GEMINI_API_KEY?.trim();
     const hasOpenai = !!process.env.OPENAI_API_KEY?.trim();
 
     if (explicit === 'openai') return 'openai';
     if (explicit === 'gemini') return 'gemini';
+    if (explicit === 'groq') return 'groq';
 
+    if (hasGroq) return 'groq';
     if (hasGemini) return 'gemini';
     if (hasOpenai) return 'openai';
-    return 'gemini';
+    return 'groq';
+  }
+
+  private activeProvider(): AiProviderKind {
+    return this.lastUsedProvider ?? this.provider();
+  }
+
+  /** Nest HttpException may put the user message on `getResponse()` instead of `.message`. */
+  private exceptionMessage(e: unknown): string {
+    if (e instanceof HttpException) {
+      const r = e.getResponse();
+      if (typeof r === 'string') return r;
+      if (typeof r === 'object' && r !== null && 'message' in r) {
+        const m = (r as { message?: unknown }).message;
+        if (typeof m === 'string') return m;
+        if (Array.isArray(m)) return m.join(' ');
+      }
+    }
+    return e instanceof Error ? e.message : String(e);
   }
 
   private modelLabel(): string {
-    return this.provider() === 'gemini' ? this.geminiModel : this.openaiModel;
+    const used = this.activeProvider();
+    if (used === 'groq') return this.groqModel;
+    if (used === 'gemini' && this.lastGeminiModelUsed) {
+      return this.lastGeminiModelUsed;
+    }
+    return used === 'gemini' ? this.geminiModel : this.openaiModel;
+  }
+
+  private geminiModels(): string[] {
+    const extra = (process.env.GEMINI_FALLBACK_MODELS || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    // Order: user primary, extras, then known-good Flash IDs (404 = try next)
+    const defaults = [
+      'gemini-2.0-flash',
+      'gemini-2.0-flash-001',
+      'gemini-1.5-flash-latest',
+      'gemini-1.5-flash-002',
+      'gemini-1.5-flash-8b',
+      'gemini-1.5-flash'
+    ];
+    return [...new Set([this.geminiModel, ...extra, ...defaults])];
   }
 
   private ensureConfigured(): void {
     const explicit = (process.env.AI_PROVIDER || '').toLowerCase().trim();
+    const hasGroq = !!process.env.GROQ_API_KEY?.trim();
     const hasGemini = !!process.env.GEMINI_API_KEY?.trim();
     const hasOpenai = !!process.env.OPENAI_API_KEY?.trim();
 
@@ -87,12 +143,55 @@ export class AiService {
       );
     }
     if (explicit === 'gemini') return;
+    if (explicit === 'groq' && !hasGroq) {
+      throw new ServiceUnavailableException(
+        'AI_PROVIDER=groq but GROQ_API_KEY is missing. Get a free key at https://console.groq.com/keys'
+      );
+    }
+    if (explicit === 'groq') return;
 
-    if (hasGemini || hasOpenai) return;
+    if (hasGroq || hasGemini || hasOpenai) return;
 
     throw new ServiceUnavailableException(
-      'No AI key on the API. Set GEMINI_API_KEY (free Gemini Flash — https://aistudio.google.com/apikey) in the **repo root** `.env` file (same folder as docker-compose.yml), then restart the API. OpenAI is optional via OPENAI_API_KEY.'
+      'No AI API key configured. Add GROQ_API_KEY (recommended free dev tier — https://console.groq.com/keys) and/or GEMINI_API_KEY / OPENAI_API_KEY in the **repo root** `.env`, then restart the API.'
     );
+  }
+
+  /** OpenAI-compatible chat (Groq free tier) */
+  private async chatGroq(messages: ChatMsg[]) {
+    const key = process.env.GROQ_API_KEY!.trim();
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: this.groqModel,
+        messages,
+        temperature: 0.2
+      })
+    });
+
+    const raw = await res.text();
+    if (!res.ok) {
+      throw new BadRequestException(
+        `Groq request failed (${res.status}): ${raw.slice(0, 2000)}`
+      );
+    }
+
+    let data: { choices?: Array<{ message?: { content?: string } }> };
+    try {
+      data = JSON.parse(raw) as typeof data;
+    } catch {
+      throw new BadRequestException('Invalid JSON from Groq');
+    }
+
+    const text = data.choices?.[0]?.message?.content?.trim();
+    if (!text) {
+      throw new BadRequestException('Empty response from Groq');
+    }
+    return text;
   }
 
   private async chatOpenAI(messages: ChatMsg[]) {
@@ -133,6 +232,7 @@ export class AiService {
 
   /** Google AI Studio / Gemini API (free tier Flash models) */
   private async chatGemini(messages: ChatMsg[]) {
+    this.lastGeminiModelUsed = null;
     const key = process.env.GEMINI_API_KEY!.trim();
     const systemText = messages
       .filter((m) => m.role === 'system')
@@ -143,10 +243,6 @@ export class AiService {
       .map((m) => `(${m.role})\n${m.content}`)
       .join('\n\n');
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
-      this.geminiModel
-    )}:generateContent?key=${encodeURIComponent(key)}`;
-
     const body: Record<string, unknown> = {
       contents: [{ role: 'user', parts: [{ text: userBlob }] }],
       generationConfig: { temperature: 0.2 }
@@ -155,43 +251,121 @@ export class AiService {
       body.systemInstruction = { parts: [{ text: systemText }] };
     }
 
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
+    let lastError = 'Unknown Gemini error';
+    let quotaHit = false;
 
-    const raw = await res.text();
-    if (!res.ok) {
-      throw new BadRequestException(
-        `Gemini request failed (${res.status}): ${raw.slice(0, 2000)}`
+    for (const model of this.geminiModels()) {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+        model
+      )}:generateContent?key=${encodeURIComponent(key)}`;
+
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+
+      const raw = await res.text();
+      if (!res.ok) {
+        const lower = raw.toLowerCase();
+        const isQuota =
+          res.status === 429 ||
+          lower.includes('resource_exhausted') ||
+          lower.includes('quota') ||
+          lower.includes('rate limit');
+        const isModelMissing =
+          res.status === 404 ||
+          lower.includes('not found') ||
+          lower.includes('was not found') ||
+          lower.includes('invalid model') ||
+          lower.includes('unknown model');
+        if (isQuota) {
+          quotaHit = true;
+          lastError = `Gemini quota exhausted for model ${model}`;
+          continue;
+        }
+        if (isModelMissing) {
+          lastError = `Gemini model not available (${res.status}) for model ${model}`;
+          continue;
+        }
+        lastError = `Gemini request failed (${res.status}) for model ${model}`;
+        throw new BadRequestException(`${lastError}: ${raw.slice(0, 800)}`);
+      }
+
+      let data: {
+        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+      };
+      try {
+        data = JSON.parse(raw) as typeof data;
+      } catch {
+        throw new BadRequestException('Invalid JSON from Gemini');
+      }
+
+      const text = data.candidates?.[0]?.content?.parts
+        ?.map((p) => p.text || '')
+        .join('')
+        .trim();
+      if (!text) {
+        lastError = `Empty response from Gemini model ${model}`;
+        continue;
+      }
+      this.lastGeminiModelUsed = model;
+      return text;
+    }
+
+    if (quotaHit) {
+      throw new ServiceUnavailableException(
+        'GEMINI_QUOTA_EXHAUSTED'
       );
     }
-
-    let data: {
-      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-    };
-    try {
-      data = JSON.parse(raw) as typeof data;
-    } catch {
-      throw new BadRequestException('Invalid JSON from Gemini');
-    }
-
-    const text = data.candidates?.[0]?.content?.parts
-      ?.map((p) => p.text || '')
-      .join('')
-      .trim();
-    if (!text) {
-      throw new BadRequestException('Empty response from Gemini');
-    }
-    return text;
+    throw new ServiceUnavailableException(
+      `No working Gemini model found. Last error: ${lastError}. Set GEMINI_MODEL to a valid ID (try gemini-2.0-flash) or GEMINI_FALLBACK_MODELS. See https://ai.google.dev/api/models`
+    );
   }
 
   private async chat(messages: ChatMsg[]) {
     this.ensureConfigured();
-    return this.provider() === 'gemini'
-      ? this.chatGemini(messages)
-      : this.chatOpenAI(messages);
+    this.lastUsedProvider = null;
+    const primary = this.provider();
+
+    if (primary === 'groq') {
+      const text = await this.chatGroq(messages);
+      this.lastUsedProvider = 'groq';
+      return text;
+    }
+
+    if (primary === 'gemini') {
+      try {
+        const text = await this.chatGemini(messages);
+        this.lastUsedProvider = 'gemini';
+        return text;
+      } catch (e) {
+        const msg = this.exceptionMessage(e);
+        const quota =
+          msg.includes('GEMINI_QUOTA_EXHAUSTED') ||
+          msg.includes('429') ||
+          msg.includes('quota');
+        if (
+          quota &&
+          process.env.GROQ_API_KEY?.trim() &&
+          primary === 'gemini'
+        ) {
+          const text = await this.chatGroq(messages);
+          this.lastUsedProvider = 'groq';
+          return text;
+        }
+        if (msg.includes('GEMINI_QUOTA_EXHAUSTED')) {
+          throw new ServiceUnavailableException(
+            'Gemini free-tier quota is exhausted. Add GROQ_API_KEY (free — https://console.groq.com/keys) to `.env` and restart the API, or wait and retry.'
+          );
+        }
+        throw e;
+      }
+    }
+
+    const text = await this.chatOpenAI(messages);
+    this.lastUsedProvider = 'openai';
+    return text;
   }
 
   async generatePipeline(prompt: string) {
@@ -212,7 +386,7 @@ export class AiService {
         yaml,
         valid: true as const,
         model,
-        provider: this.provider(),
+        provider: this.activeProvider(),
         rawResponse: raw
       };
     } catch (err) {
@@ -222,7 +396,7 @@ export class AiService {
         valid: false as const,
         validationError: message,
         model,
-        provider: this.provider(),
+        provider: this.activeProvider(),
         rawResponse: raw
       };
     }
@@ -260,7 +434,7 @@ export class AiService {
         yaml,
         valid: true as const,
         model,
-        provider: this.provider(),
+        provider: this.activeProvider(),
         rawResponse: raw
       };
     } catch (err) {
@@ -270,7 +444,7 @@ export class AiService {
         valid: false as const,
         validationError: message,
         model,
-        provider: this.provider(),
+        provider: this.activeProvider(),
         rawResponse: raw
       };
     }
@@ -296,6 +470,10 @@ export class AiService {
       { role: 'user', content: user }
     ]);
 
-    return { analysis, model: this.modelLabel(), provider: this.provider() };
+    return {
+      analysis,
+      model: this.modelLabel(),
+      provider: this.activeProvider()
+    };
   }
 }
