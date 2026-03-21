@@ -320,5 +320,59 @@ export class DatabaseService implements OnModuleInit {
   async setPipelineStatus(pipelineId: string, status: string) {
     await this.pool.query(`UPDATE pipelines SET status=$2 WHERE id=$1`, [pipelineId, status]);
   }
+
+  async listProjects(limit = 100) {
+    const res = await this.pool.query(
+      `SELECT id, tenant_id, name, repo_url, default_branch, provider, created_at
+       FROM projects
+       ORDER BY created_at DESC
+       LIMIT $1`,
+      [limit]
+    );
+    return res.rows;
+  }
+
+  async listPipelines(limit = 50) {
+    const res = await this.pool.query(
+      `SELECT id, tenant_id, project_id, commit_sha, branch, status, created_at, source
+       FROM pipelines
+       ORDER BY created_at DESC
+       LIMIT $1`,
+      [limit]
+    );
+    return res.rows;
+  }
+
+  async getPipelineById(pipelineId: string) {
+    const res = await this.pool.query(
+      `SELECT id, tenant_id, project_id, commit_sha, branch, status, created_at, source
+       FROM pipelines
+       WHERE id=$1`,
+      [pipelineId]
+    );
+    return res.rows[0];
+  }
+
+  async getPipelineStages(pipelineId: string) {
+    const res = await this.pool.query(
+      `SELECT id, name, position, status, created_at, started_at, finished_at
+       FROM pipeline_stages
+       WHERE pipeline_id=$1
+       ORDER BY position ASC`,
+      [pipelineId]
+    );
+    return res.rows;
+  }
+
+  async getPipelineJobs(pipelineId: string) {
+    const res = await this.pool.query(
+      `SELECT id, stage_id, name, status, image, script, logs, artifacts_dir, queued_at, started_at, finished_at
+       FROM jobs
+       WHERE pipeline_id=$1
+       ORDER BY queued_at ASC`,
+      [pipelineId]
+    );
+    return res.rows;
+  }
 }
 

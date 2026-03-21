@@ -1,16 +1,25 @@
-FROM node:20-alpine AS build
+# API — NestJS control plane (monorepo root = build context)
+FROM node:20-bookworm AS build
 WORKDIR /app
-COPY package.json pnpm-workspace.yaml ./
+RUN corepack enable && corepack prepare pnpm@10.32.1 --activate
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY apps ./apps
-RUN npm install -g pnpm && pnpm install --filter api...
-RUN pnpm approve-builds --all
+COPY services ./services
+COPY libs ./libs
+
+ENV CI=true
+RUN pnpm install --frozen-lockfile
 RUN pnpm --filter api build
 
-FROM node:20-alpine
+FROM node:20-bookworm-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
-COPY --from=build /app/apps/api/dist ./dist
-COPY apps/api/package.json ./
-RUN npm install -g pnpm && pnpm install --prod
-CMD ["node", "dist/main.js"]
 
+COPY --from=build /app/apps/api/dist ./dist
+COPY --from=build /app/apps/api/package.json ./package.json
+RUN npm install --omit=dev
+
+EXPOSE 3010
+ENV PORT=3010
+CMD ["node", "dist/main.js"]

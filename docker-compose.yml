@@ -1,3 +1,12 @@
+# Postgres + Redis (default):  docker compose up -d
+# Full stack (+ API + worker + dashboard):  docker compose --profile full up --build
+#
+# Dashboard (browser) calls API at NEXT_PUBLIC_API_URL (must match host port below).
+# If 3010 is already in use on your PC, set API_HOST_PORT in .env (e.g. 3012) and rebuild dashboard.
+# Worker mounts the host Docker socket to run job images (same engine as Compose).
+
+name: devops-automation
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -9,12 +18,100 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U devops -d devops_automation"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  api:
+    profiles: ["full"]
+    build:
+      context: .
+      dockerfile: infra/docker/api.Dockerfile
+    ports:
+      - "${API_HOST_PORT:-3010}:3010"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3010/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    environment:
+      PORT: "3010"
+      NODE_ENV: production
+      DATABASE_URL: postgresql://devops:devops@postgres:5432/devops_automation
+      REDIS_URL: redis://redis:6379
+      JOB_QUEUE_NAME: jobs
+      DASHBOARD_ORIGIN: http://localhost:3001
+      # AI: Gemini (free) preferred when GEMINI_API_KEY is set — see README / repo root .env
+      AI_PROVIDER: ${AI_PROVIDER:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    profiles: ["full"]
+    build:
+      context: .
+      dockerfile: infra/docker/worker.Dockerfile
+    environment:
+      API_BASE_URL: http://api:3010
+      REDIS_URL: redis://redis:6379
+      JOB_QUEUE_NAME: jobs
+      ARTIFACTS_ROOT: /app/artifacts
+      NODE_ENV: production
+    volumes:
+      - worker-artifacts:/app/artifacts
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      api:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  dashboard:
+    profiles: ["full"]
+    build:
+      context: .
+      dockerfile: infra/docker/dashboard.Dockerfile
+      args:
+        # URL the *browser* uses to reach the API (same host port as API_HOST_PORT)
+        NEXT_PUBLIC_API_URL: http://localhost:${API_HOST_PORT:-3010}
+    ports:
+      - "3001:3001"
+    environment:
+      PORT: "3001"
+      NODE_ENV: production
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   pgdata:
-
+  worker-artifacts:

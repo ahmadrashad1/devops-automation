@@ -7,6 +7,10 @@ coverage/
 
 .env
 .env.*
+!.env.example
+
+# Never store secrets next to workflows (Compose only loads repo-root .env)
+.github/workflows/.env
 
 *.log
 

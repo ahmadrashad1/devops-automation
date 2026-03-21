@@ -6,22 +6,9 @@ import { promisify } from 'util';
 import { mkdtemp, readFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { load as loadYaml } from 'js-yaml';
+import { parsePipelineYamlContent } from './pipeline-yaml.util';
 
 const execFileAsync = promisify(execFile);
-
-type PipelineYaml = {
-  pipeline?: {
-    stages?: string[];
-  };
-  [jobName: string]:
-    | any
-    | {
-        stage?: string;
-        image?: string;
-        script?: string[];
-      };
-};
 
 @Injectable()
 export class PipelineService {
@@ -53,7 +40,7 @@ export class PipelineService {
       commitSha: params.commitSha
     });
 
-    const { stages, jobs } = this.parsePipelineYaml(config);
+    const { stages, jobs } = parsePipelineYamlContent(config);
 
     const persisted = await this.db.createStagesAndJobs({
       pipelineId: pipeline.id,
@@ -84,31 +71,6 @@ export class PipelineService {
     }
 
     return { pipelineId: pipeline.id, stageCount: stages.length, jobCount: persisted.jobs.length };
-  }
-
-  private parsePipelineYaml(yamlText: string) {
-    const doc = loadYaml(yamlText) as PipelineYaml;
-    const stageList = doc?.pipeline?.stages;
-    if (!Array.isArray(stageList) || stageList.length === 0) {
-      throw new Error('Invalid pipeline yaml: pipeline.stages missing');
-    }
-
-    const jobs: Array<{ name: string; stage: string; image: string; script: string[] }> = [];
-    for (const [key, value] of Object.entries(doc)) {
-      if (key === 'pipeline') continue;
-      if (!value || typeof value !== 'object') continue;
-      const stage = (value as any).stage;
-      const image = (value as any).image;
-      const script = (value as any).script;
-      if (!stage || !image || !Array.isArray(script)) continue;
-      jobs.push({ name: key, stage, image, script });
-    }
-
-    if (jobs.length === 0) {
-      throw new Error('Invalid pipeline yaml: no jobs found');
-    }
-
-    return { stages: stageList, jobs };
   }
 
   private async fetchPipelineConfig(params: { repoUrl: string; commitSha: string }) {
