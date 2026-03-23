@@ -17,7 +17,7 @@ export default function HomePage() {
             View pipelines
           </Link>
           <Link href="/ai" className="btn">
-            Open AI workflow
+            AI Workflow
           </Link>
         </div>
       </section>
