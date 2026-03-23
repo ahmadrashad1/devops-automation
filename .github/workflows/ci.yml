@@ -20,17 +20,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: "pnpm"
 
-      - name: Enable pnpm (Corepack)
-        run: |
-          corepack enable
-          corepack prepare pnpm@10.32.1 --activate
-          pnpm -v
+      - name: Verify pnpm
+        run: pnpm -v
 
       # Build script allowlist lives in pnpm-workspace.yaml (allowBuilds).
       # Avoid `approve-builds` in CI — not required once policy is committed (pnpm guidance).
