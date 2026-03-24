@@ -1,11 +1,6 @@
-/**
- * Browser + server: use NEXT_PUBLIC_API_URL (e.g. http://localhost:3010).
- */
 export function getApiBase(): string {
-  const base =
-    (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_API_URL) ||
-    'http://localhost:3010';
-  return base.replace(/\/$/, '');
+  // Use same-origin calls and let Next.js rewrites proxy to the API.
+  return '';
 }
 
 export function apiPath(path: string): string {

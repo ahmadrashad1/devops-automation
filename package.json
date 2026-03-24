@@ -10,7 +10,15 @@
     "dev": "concurrently \"pnpm dev:api\" \"pnpm dev:dashboard\" \"pnpm dev:worker\"",
     "docker:infra": "docker compose up -d",
     "docker:up": "docker compose --profile full up --build",
-    "docker:down": "docker compose down"
+    "docker:down": "docker compose down",
+    "tf:init": "terraform -chdir=infra/terraform init",
+    "tf:plan": "terraform -chdir=infra/terraform plan",
+    "tf:apply": "terraform -chdir=infra/terraform apply",
+    "tf:destroy": "terraform -chdir=infra/terraform destroy",
+    "tf:aws:init": "terraform -chdir=infra/terraform/aws init",
+    "tf:aws:plan": "terraform -chdir=infra/terraform/aws plan",
+    "tf:aws:apply": "terraform -chdir=infra/terraform/aws apply",
+    "tf:aws:destroy": "terraform -chdir=infra/terraform/aws destroy"
   },
   "devDependencies": {
     "concurrently": "^9.0.0"

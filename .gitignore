@@ -23,3 +23,12 @@ test-repos/
 artifacts/
 services/worker/artifacts/
 
+# Terraform local state/secrets
+.terraform/
+*.tfstate
+*.tfstate.*
+infra/terraform/.terraform.lock.hcl
+infra/terraform/terraform.tfvars
+infra/terraform/aws/.terraform.lock.hcl
+infra/terraform/aws/terraform.tfvars
+

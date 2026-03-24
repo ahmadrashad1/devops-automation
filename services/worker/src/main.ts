@@ -166,6 +166,92 @@ async function runInDockerStreaming(params: {
   return finalLogs.trim();
 }
 
+async function runDirectStreaming(params: {
+  workDir: string;
+  jobId: string;
+  script: string[];
+  onLogChunk: (chunk: string) => Promise<void>;
+}) {
+  const flushIntervalMs = Number(process.env.LOG_FLUSH_INTERVAL_MS || 1000);
+  const flushMaxChars = Number(process.env.LOG_FLUSH_MAX_CHARS || 64 * 1024);
+  const jobTimeoutMs = Number(process.env.JOB_TIMEOUT_MS || 15 * 60 * 1000);
+
+  const child = spawn('sh', ['-c', `set -eu; ${params.script.join(' && ')}`], {
+    cwd: params.workDir,
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    try {
+      child.kill('SIGKILL');
+    } catch {
+      // ignore
+    }
+  }, jobTimeoutMs);
+
+  let finalLogs = '';
+  let pending = '';
+  let lastFlush = Date.now();
+  let flushPromise: Promise<void> = Promise.resolve();
+
+  const scheduleFlush = () => {
+    if (!pending) return;
+    const chunk = pending;
+    pending = '';
+    lastFlush = Date.now();
+    flushPromise = flushPromise
+      .then(() => params.onLogChunk(chunk))
+      .catch((err) => {
+        logger.warn(
+          { jobId: params.jobId, err: err?.message || String(err) },
+          'Failed to stream logs to API'
+        );
+      });
+  };
+
+  child.stdout.on('data', (buf) => {
+    const s = buf.toString('utf8');
+    finalLogs += s;
+    pending += s;
+    if (pending.length >= flushMaxChars || Date.now() - lastFlush >= flushIntervalMs) {
+      scheduleFlush();
+    }
+  });
+
+  child.stderr.on('data', (buf) => {
+    const s = buf.toString('utf8');
+    finalLogs += s;
+    pending += s;
+    if (pending.length >= flushMaxChars || Date.now() - lastFlush >= flushIntervalMs) {
+      scheduleFlush();
+    }
+  });
+
+  const exitCode: number = await new Promise<number>((resolve, reject) => {
+    child.on('error', reject);
+    child.on('close', (code: number | null) => resolve(code ?? 1));
+  }).finally(() => clearTimeout(timer));
+
+  scheduleFlush();
+  await flushPromise;
+
+  if (timedOut) {
+    const err: any = new Error(`Job timed out after ${jobTimeoutMs}ms`);
+    err.logs = finalLogs.trim();
+    throw err;
+  }
+
+  if (exitCode !== 0) {
+    const err: any = new Error(`direct run failed with exit code ${exitCode}`);
+    err.logs = finalLogs.trim();
+    throw err;
+  }
+
+  return finalLogs.trim();
+}
+
 async function bootstrap() {
   const queueName = process.env.JOB_QUEUE_NAME || 'jobs';
 
@@ -202,13 +288,24 @@ async function bootstrap() {
       let artifactsDir: string | undefined = undefined;
 
       try {
-        logs = await runInDockerStreaming({
-          workDir,
-          jobId: pipelineJobId,
-          image,
-          script,
-          onLogChunk: (chunk) => postJobLogs(pipelineJobId, chunk)
-        });
+        const executor = (process.env.JOB_EXECUTOR || 'docker').toLowerCase();
+        if (executor === 'direct') {
+          logger.warn({ jobId: pipelineJobId }, 'Using direct executor (no Docker isolation)');
+          logs = await runDirectStreaming({
+            workDir,
+            jobId: pipelineJobId,
+            script,
+            onLogChunk: (chunk) => postJobLogs(pipelineJobId, chunk)
+          });
+        } else {
+          logs = await runInDockerStreaming({
+            workDir,
+            jobId: pipelineJobId,
+            image,
+            script,
+            onLogChunk: (chunk) => postJobLogs(pipelineJobId, chunk)
+          });
+        }
 
         // MVP artifacts: persist logs to disk under ./artifacts (or ARTIFACTS_ROOT).
         const artifactsRoot = process.env.ARTIFACTS_ROOT || join(process.cwd(), 'artifacts');

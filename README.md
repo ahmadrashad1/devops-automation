@@ -105,6 +105,44 @@ Stop and remove containers: `pnpm docker:down` or `docker compose down`.
 
 **Security:** the worker can start arbitrary images from your pipeline YAML; only use trusted repos and protect the host Docker socket.
 
+### Terraform (alternative local infra)
+
+You can manage the local Docker stack with Terraform instead of Compose.
+
+```bash
+pnpm tf:init
+cp infra/terraform/terraform.tfvars.example infra/terraform/terraform.tfvars
+pnpm tf:plan
+pnpm tf:apply
+```
+
+Destroy:
+
+```bash
+pnpm tf:destroy
+```
+
+See `infra/terraform/README.md` for variables and Windows notes (`mount_docker_socket`).
+
+### Terraform AWS target (cloud)
+
+Terraform can also deploy the app to AWS ECS/Fargate with an ALB.
+
+```bash
+pnpm tf:aws:init
+cp infra/terraform/aws/terraform.tfvars.example infra/terraform/aws/terraform.tfvars
+pnpm tf:aws:plan
+pnpm tf:aws:apply
+```
+
+Destroy:
+
+```bash
+pnpm tf:aws:destroy
+```
+
+See `infra/terraform/aws/README.md` for prerequisites (AWS credentials, image registry, database/redis URLs) and details.
+
 ## Dashboard troubleshooting (Next.js “Cannot find module … vendor-chunks …”)
 
 This usually means a **stale** `apps/dashboard/.next` folder or pnpm’s symlink layout confusing the dev server.

@@ -1,0 +1,28 @@
+project_name      = "devops-automation"
+enable_full_stack = true
+
+# Change these if ports are already in use.
+api_host_port       = 3010
+dashboard_host_port = 3001
+postgres_host_port  = 5432
+redis_host_port     = 6379
+
+# Keep aligned with api_host_port for dashboard build.
+api_public_url = "http://localhost:3010"
+
+dashboard_origin = "http://localhost:3001"
+job_queue_name   = "jobs"
+
+# Optional provider override: "groq", "gemini", "openai", or "" for auto.
+ai_provider = ""
+
+# AI keys (do not commit real values).
+groq_api_key   = ""
+groq_model     = "llama-3.1-8b-instant"
+gemini_api_key = ""
+gemini_model   = "gemini-2.0-flash"
+openai_api_key = ""
+openai_model   = "gpt-4o-mini"
+
+# Linux/macOS only unless Docker socket path is available.
+mount_docker_socket = false

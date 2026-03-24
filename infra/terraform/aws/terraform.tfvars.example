@@ -1,0 +1,48 @@
+aws_region   = "us-east-1"
+project_name = "devops-automation"
+
+vpc_cidr            = "10.20.0.0/16"
+public_subnet_cidrs = ["10.20.1.0/24", "10.20.2.0/24"]
+
+# Set these to your pushed image URIs (ECR or another registry).
+api_image       = "123456789012.dkr.ecr.us-east-1.amazonaws.com/devops-automation-api:latest"
+dashboard_image = "123456789012.dkr.ecr.us-east-1.amazonaws.com/devops-automation-dashboard:latest"
+worker_image    = "123456789012.dkr.ecr.us-east-1.amazonaws.com/devops-automation-worker:latest"
+
+# Managed services (RDS/ElastiCache) or external endpoints.
+database_url = "postgresql://USER:PASSWORD@HOST:5432/devops_automation"
+redis_url    = "redis://HOST:6379"
+
+job_queue_name = "jobs"
+
+# Service sizing/counts
+api_desired_count       = 1
+dashboard_desired_count = 1
+worker_desired_count    = 1
+
+enable_autoscaling   = true
+api_min_count        = 1
+api_max_count        = 4
+dashboard_min_count  = 1
+dashboard_max_count  = 3
+autoscaling_cpu_target = 60
+
+# HTTPS + DNS (optional)
+enable_https        = false
+acm_certificate_arn = ""
+enable_route53_alias = false
+route53_zone_id     = ""
+domain_name         = ""
+
+# Alerts (optional but recommended)
+enable_alarms = true
+alert_email   = ""
+
+# Optional AI settings
+ai_provider    = ""
+groq_api_key   = ""
+groq_model     = "llama-3.1-8b-instant"
+gemini_api_key = ""
+gemini_model   = "gemini-2.0-flash"
+openai_api_key = ""
+openai_model   = "gpt-4o-mini"
